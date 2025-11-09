@@ -122,17 +122,25 @@ std::vector<std::wstring> GetTopTrends(const std::wstring& url) {
 
             std::string rssContent = rssStream.str();
             size_t itemPos = 0;
+            bool firstTitle = true; // Skip the first <title> tag (feed URL)
+            
             while ((itemPos = rssContent.find("<title>", itemPos)) != std::string::npos) {
                 size_t start = itemPos + 7;
                 size_t end = rssContent.find("</title>", start);
                 if (end != std::string::npos) {
                     std::string utf8Title = rssContent.substr(start, end - start);
 
-
-                    if (utf8Title != "Daily Search Trends") {
+                    // Skip first title and filter out unwanted entries
+                    if (!firstTitle && 
+                        utf8Title.find("http") == std::string::npos &&
+                        utf8Title.find("trends.google.com") == std::string::npos &&
+                        utf8Title.find("Daily Search Trends") == std::string::npos &&
+                        utf8Title.find("Google Trends") == std::string::npos &&
+                        !utf8Title.empty()) {
                         trends.push_back(Utf8ToWide(utf8Title));
                     }
-
+                    
+                    firstTitle = false;
                     itemPos = end;
                 }
                 else {
