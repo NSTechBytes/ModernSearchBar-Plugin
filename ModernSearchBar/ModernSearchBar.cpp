@@ -216,11 +216,13 @@ void LoadDataAsync(ParentMeasure* parent, void* rm) {
         tempResults = GetTopTrends(trendsUrl);
     }
 
-    // Thread-safe update
+    // Thread-safe update - only update if we got new data
     {
         std::lock_guard<std::mutex> lock(parent->dataMutex);
-        parent->results = tempResults;
-        parent->dataReady = true;
+        if (!tempResults.empty()) {
+            parent->results = tempResults;
+            parent->dataReady = true;
+        }
     }
     
     parent->isLoading = false;
@@ -288,8 +290,7 @@ PLUGIN_EXPORT void Reload(void* data, void* rm, double* maxValue) {
         parent->profile = RmReadString(rm, L"Profile", L"Default");
         parent->onCompleteAction = RmReadString(rm, L"OnCompleteAction", L"", FALSE);
 
-        // Reset flags
-        parent->dataReady = false;
+        // Reset action flag (keep cached data and dataReady status)
         parent->hasExecutedAction = false;
 
         // Start async loading
@@ -335,7 +336,7 @@ PLUGIN_EXPORT LPCWSTR GetString(void* data) {
     // Thread-safe read
     std::lock_guard<std::mutex> lock(parent->dataMutex);
     
-    // Return the specific index (1-based)
+    // Always return cached data if available (even while loading new data)
     if (!parent->results.empty()) {
         if (child->index > 0 && child->index <= static_cast<int>(parent->results.size())) {
             result = parent->results[child->index - 1];
@@ -344,6 +345,7 @@ PLUGIN_EXPORT LPCWSTR GetString(void* data) {
             result = L"";
         }
     }
+    // Only show loading states when no cached data is available
     else if (parent->isLoading) {
         result = L"Loading...";
     }
