@@ -22,8 +22,8 @@
     <ResourceCompile Include="ModernSearchBar.rc" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\..\Downloads\sqlite-amalgamation-3470200\sqlite-amalgamation-3470200\sqlite3.c" />
     <ClCompile Include="ModernSearchBar.cpp" />
+    <ClCompile Include="..\sqlite3\sqlite3.c" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{64FDEE97-6B7E-40E5-A489-ECA322825BC8}</ProjectGuid>
@@ -88,13 +88,13 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <LinkIncremental>false</LinkIncremental>
-    <TargetName>Empty</TargetName>
+    <TargetName>ModernSearchBar</TargetName>
     <OutDir>x32\$(Configuration)\</OutDir>
     <IntDir>x32\$(Configuration)\</IntDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
-    <TargetName>Empty</TargetName>
+    <TargetName>ModernSearchBar</TargetName>
     <OutDir>x64\$(Configuration)\</OutDir>
     <IntDir>x64\$(Configuration)\</IntDir>
   </PropertyGroup>
@@ -163,13 +163,14 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;ModernSearchBar_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <MergeSections>.rdata=.text</MergeSections>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>..\..\API\x64\Rainmeter.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>..\API\x64\Rainmeter.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Windows</SubSystem>
     </Link>
     <ResourceCompile>

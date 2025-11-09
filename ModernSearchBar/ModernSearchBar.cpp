@@ -2,9 +2,8 @@
 #include <string>
 #include <vector>
 #include <filesystem>
-#include "../API/sqlite3.h"
-#include <codecvt>
-#include <locale>
+#include "../sqlite3/sqlite3.h"
+
 #include <wininet.h>
 #include <sstream>
 #include "../API/RainmeterAPI.h"
@@ -12,8 +11,18 @@
 #pragma comment(lib, "wininet.lib")
 
 std::wstring Utf8ToWide(const std::string& utf8Str) {
-    std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-    return converter.from_bytes(utf8Str);
+    if (utf8Str.empty()) {
+        return std::wstring();
+    }
+
+    int wideStrLen = MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), -1, nullptr, 0);
+    if (wideStrLen == 0) {
+        return std::wstring();
+    }
+
+    std::wstring wideStr(wideStrLen - 1, 0);
+    MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), -1, &wideStr[0], wideStrLen);
+    return wideStr;
 }
 //=====================================================================================================================================================//
 //                                                        Copy Chrome File                                                                             //

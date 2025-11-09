@@ -5,6 +5,5 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="ModernSearchBar.cpp" />
-    <ClCompile Include="..\..\..\Downloads\sqlite-amalgamation-3470200\sqlite-amalgamation-3470200\sqlite3.c" />
   </ItemGroup>
 </Project>
