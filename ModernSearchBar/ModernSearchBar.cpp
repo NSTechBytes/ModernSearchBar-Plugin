@@ -28,12 +28,12 @@ std::wstring Utf8ToWide(const std::string& utf8Str) {
 //                                                        Copy Chrome File                                                                             //
 //=====================================================================================================================================================//
 
-std::wstring CopyChromeHistoryToTemp() {
+std::wstring CopyChromeHistoryToTemp(const std::wstring& profile) {
     wchar_t tempPath[MAX_PATH];
     GetTempPathW(MAX_PATH, tempPath);
 
     std::wstring tempFolder = tempPath;
-    std::wstring chromeHistorySource = L"%LOCALAPPDATA%\\Google\\Chrome\\User Data\\Default\\History";
+    std::wstring chromeHistorySource = L"%LOCALAPPDATA%\\Google\\Chrome\\User Data\\" + profile + L"\\History";
     std::wstring chromeHistoryTarget = tempFolder + L"History_Copy.db";
 
     wchar_t resolvedPath[MAX_PATH];
@@ -147,11 +147,13 @@ std::vector<std::wstring> GetTopTrends(const std::wstring& url, int num) {
 struct Measure {
     std::wstring type;
     int num;
+    std::wstring countryCode;
+    std::wstring profile;
     std::wstring onCompleteAction;
     std::vector<std::wstring> historyTitles;
     void* skin;
 
-    Measure() : type(L""), num(0), onCompleteAction(L""), skin(nullptr) {}
+    Measure() : type(L""), num(0), countryCode(L"US"), profile(L"Default"), onCompleteAction(L""), skin(nullptr) {}
 };
 
 PLUGIN_EXPORT void Initialize(void** data, void* rm) {
@@ -160,10 +162,12 @@ PLUGIN_EXPORT void Initialize(void** data, void* rm) {
 
     measure->type = RmReadString(rm, L"Type", L"");
     measure->num = static_cast<int>(RmReadInt(rm, L"Num", 5));
+    measure->countryCode = RmReadString(rm, L"CountryCode", L"US");
+    measure->profile = RmReadString(rm, L"Profile", L"Default");
     measure->skin = RmGetSkin(rm);
 
     if (measure->type == L"Chrome_History") {
-        std::wstring dbPath = CopyChromeHistoryToTemp();
+        std::wstring dbPath = CopyChromeHistoryToTemp(measure->profile);
         if (!dbPath.empty()) {
             measure->historyTitles = GetLastHistoryTitles(dbPath, measure->num);
         }
@@ -172,7 +176,7 @@ PLUGIN_EXPORT void Initialize(void** data, void* rm) {
         }
     }
     else if (measure->type == L"Top_Trends") {
-        std::wstring trendsUrl = L"https://trends.google.com/trends/trendingsearches/daily/rss?geo=US";
+        std::wstring trendsUrl = L"https://trends.google.com/trending/rss?geo=" + measure->countryCode;
         measure->historyTitles = GetTopTrends(trendsUrl, measure->num);
     }
 }
@@ -182,16 +186,18 @@ PLUGIN_EXPORT void Reload(void* data, void* rm, double* maxValue) {
 
     measure->type = RmReadString(rm, L"Type", L"");
     measure->num = static_cast<int>(RmReadInt(rm, L"Num", 5));
+    measure->countryCode = RmReadString(rm, L"CountryCode", L"US");
+    measure->profile = RmReadString(rm, L"Profile", L"Default");
     measure->onCompleteAction = RmReadString(rm, L"OnCompleteAction", L"", FALSE);
 
     if (measure->type == L"Chrome_History") {
-        std::wstring dbPath = CopyChromeHistoryToTemp();
+        std::wstring dbPath = CopyChromeHistoryToTemp(measure->profile);
         if (!dbPath.empty()) {
             measure->historyTitles = GetLastHistoryTitles(dbPath, measure->num);
         }
     }
     else if (measure->type == L"Top_Trends") {
-        std::wstring trendsUrl = L"https://trends.google.com/trends/trendingsearches/daily/rss?geo=US";
+        std::wstring trendsUrl = L"https://trends.google.com/trending/rss?geo=" + measure->countryCode;
         measure->historyTitles = GetTopTrends(trendsUrl, measure->num);
     }
 }
