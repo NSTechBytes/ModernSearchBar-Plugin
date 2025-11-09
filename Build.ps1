@@ -521,8 +521,8 @@ function Dist {
         [Parameter(Mandatory = $true)][int16]$patch
     )
 
-    $solutionFile = ".\WeatherX.sln"
-    $projectName = "WeatherX"
+    $solutionFile = ".\ModernSearchBar-Plugin.sln"
+    $projectName = "ModernSearchBar"
     
     if (!(Test-Path $solutionFile)) {
         throw "Solution file not found: $solutionFile"
