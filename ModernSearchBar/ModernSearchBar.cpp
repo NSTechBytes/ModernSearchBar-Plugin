@@ -10,6 +10,7 @@
 #include <sstream>
 #include "../API/RainmeterAPI.h"
 #include <set>
+#include <algorithm>
 #pragma comment(lib, "wininet.lib")
 
 std::wstring Utf8ToWide(const std::string& utf8Str) {
@@ -62,7 +63,7 @@ std::wstring CopyChromeHistoryToTemp(const std::wstring& profile) {
 * Parse Chrome History
 */
 
-std::vector<std::wstring> GetLastHistoryTitles(const std::wstring& dbPath, int num) {
+std::vector<std::wstring> GetLastHistoryTitles(const std::wstring& dbPath) {
     std::vector<std::wstring> historyTitles;
     std::set<std::wstring> seenTitles;
 
@@ -72,7 +73,7 @@ std::vector<std::wstring> GetLastHistoryTitles(const std::wstring& dbPath, int n
 
     if (sqlite3_open16(dbPath.c_str(), &db) == SQLITE_OK) {
         if (sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
-            while (sqlite3_step(stmt) == SQLITE_ROW && static_cast<int>(historyTitles.size()) < num) {
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
                 const unsigned char* title = sqlite3_column_text(stmt, 0);
                 if (title) {
                     std::string utf8Title(reinterpret_cast<const char*>(title));
@@ -103,7 +104,7 @@ std::vector<std::wstring> GetLastHistoryTitles(const std::wstring& dbPath, int n
 *  Fetch Top Searches
 */
 
-std::vector<std::wstring> GetTopTrends(const std::wstring& url, int num) {
+std::vector<std::wstring> GetTopTrends(const std::wstring& url) {
     std::vector<std::wstring> trends;
 
     HINTERNET hInternet = InternetOpenW(L"RainmeterPlugin", INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
@@ -121,7 +122,7 @@ std::vector<std::wstring> GetTopTrends(const std::wstring& url, int num) {
 
             std::string rssContent = rssStream.str();
             size_t itemPos = 0;
-            while ((itemPos = rssContent.find("<title>", itemPos)) != std::string::npos && trends.size() < static_cast<size_t>(num)) {
+            while ((itemPos = rssContent.find("<title>", itemPos)) != std::string::npos) {
                 size_t start = itemPos + 7;
                 size_t end = rssContent.find("</title>", start);
                 if (end != std::string::npos) {
@@ -146,17 +147,21 @@ std::vector<std::wstring> GetTopTrends(const std::wstring& url, int num) {
 }
 
 /*
-* Rainmeter API Functions
+* Rainmeter API Functions - Parent/Child Pattern
 */
 
-struct Measure {
+struct ChildMeasure;
+
+struct ParentMeasure {
+    void* skin;
+    LPCWSTR name;
+    ChildMeasure* ownerChild;
+
     std::wstring type;
-    int num;
     std::wstring countryCode;
     std::wstring profile;
     std::wstring onCompleteAction;
-    std::vector<std::wstring> historyTitles;
-    void* skin;
+    std::vector<std::wstring> results;
     
     std::thread workerThread;
     std::mutex dataMutex;
@@ -164,122 +169,177 @@ struct Measure {
     std::atomic<bool> dataReady;
     bool hasExecutedAction;
 
-    Measure() : type(L""), num(0), countryCode(L"US"), profile(L"Default"), 
-                onCompleteAction(L""), skin(nullptr), isLoading(false), 
-                dataReady(false), hasExecutedAction(false) {}
+    ParentMeasure() : skin(nullptr), name(nullptr), ownerChild(nullptr),
+                      type(L""), countryCode(L"US"), profile(L"Default"), 
+                      onCompleteAction(L""), isLoading(false), 
+                      dataReady(false), hasExecutedAction(false) {}
     
-    ~Measure() {
+    ~ParentMeasure() {
         if (workerThread.joinable()) {
             workerThread.join();
         }
     }
 };
 
-void LoadDataAsync(Measure* measure, void* rm) {
-    measure->isLoading = true;
+struct ChildMeasure {
+    int index;
+    ParentMeasure* parent;
+
+    ChildMeasure() : index(1), parent(nullptr) {}
+};
+
+std::vector<ParentMeasure*> g_ParentMeasures;
+
+void LoadDataAsync(ParentMeasure* parent, void* rm) {
+    parent->isLoading = true;
     std::vector<std::wstring> tempResults;
 
-    if (measure->type == L"Chrome_History") {
-        std::wstring dbPath = CopyChromeHistoryToTemp(measure->profile);
+    if (parent->type == L"Chrome_History") {
+        std::wstring dbPath = CopyChromeHistoryToTemp(parent->profile);
         if (!dbPath.empty()) {
-            tempResults = GetLastHistoryTitles(dbPath, measure->num);
+            tempResults = GetLastHistoryTitles(dbPath);
         }
         else {
             if (rm) RmLog(rm, LOG_ERROR, L"Could not copy Chrome history database.");
         }
     }
-    else if (measure->type == L"Top_Trends") {
-        std::wstring trendsUrl = L"https://trends.google.com/trending/rss?geo=" + measure->countryCode;
-        tempResults = GetTopTrends(trendsUrl, measure->num);
+    else if (parent->type == L"Top_Trends") {
+        std::wstring trendsUrl = L"https://trends.google.com/trending/rss?geo=" + parent->countryCode;
+        tempResults = GetTopTrends(trendsUrl);
     }
 
     // Thread-safe update
     {
-        std::lock_guard<std::mutex> lock(measure->dataMutex);
-        measure->historyTitles = tempResults;
-        measure->dataReady = true;
+        std::lock_guard<std::mutex> lock(parent->dataMutex);
+        parent->results = tempResults;
+        parent->dataReady = true;
     }
     
-    measure->isLoading = false;
+    parent->isLoading = false;
 }
 
 PLUGIN_EXPORT void Initialize(void** data, void* rm) {
-    Measure* measure = new Measure;
-    *data = measure;
+    ChildMeasure* child = new ChildMeasure;
+    *data = child;
 
-    measure->type = RmReadString(rm, L"Type", L"");
-    measure->num = static_cast<int>(RmReadInt(rm, L"Num", 5));
-    measure->countryCode = RmReadString(rm, L"CountryCode", L"US");
-    measure->profile = RmReadString(rm, L"Profile", L"Default");
-    measure->onCompleteAction = RmReadString(rm, L"OnCompleteAction", L"", FALSE);
-    measure->skin = RmGetSkin(rm);
+    void* skin = RmGetSkin(rm);
 
-    // Start async loading
-    if (!measure->type.empty()) {
-        measure->workerThread = std::thread(LoadDataAsync, measure, rm);
+    LPCWSTR parentName = RmReadString(rm, L"ParentName", L"");
+    if (!*parentName) {
+        // This is a parent measure
+        child->parent = new ParentMeasure;
+        child->parent->name = RmGetMeasureName(rm);
+        child->parent->skin = skin;
+        child->parent->ownerChild = child;
+        g_ParentMeasures.push_back(child->parent);
+
+        child->parent->type = RmReadString(rm, L"Type", L"");
+        child->parent->countryCode = RmReadString(rm, L"CountryCode", L"US");
+        child->parent->profile = RmReadString(rm, L"Profile", L"Default");
+        child->parent->onCompleteAction = RmReadString(rm, L"OnCompleteAction", L"", FALSE);
+
+        // Start async loading
+        if (!child->parent->type.empty()) {
+            child->parent->workerThread = std::thread(LoadDataAsync, child->parent, rm);
+        }
+    }
+    else {
+        // This is a child measure - find parent using name AND skin handle
+        std::vector<ParentMeasure*>::const_iterator iter = g_ParentMeasures.begin();
+        for (; iter != g_ParentMeasures.end(); ++iter) {
+            if (_wcsicmp((*iter)->name, parentName) == 0 && (*iter)->skin == skin) {
+                child->parent = (*iter);
+                return;
+            }
+        }
+
+        RmLog(rm, LOG_ERROR, L"Invalid \"ParentName\"");
     }
 }
 
 PLUGIN_EXPORT void Reload(void* data, void* rm, double* maxValue) {
-    Measure* measure = (Measure*)data;
+    ChildMeasure* child = (ChildMeasure*)data;
+    ParentMeasure* parent = child->parent;
 
-    // Wait for previous thread to finish
-    if (measure->workerThread.joinable()) {
-        measure->workerThread.join();
+    if (!parent) {
+        return;
     }
 
-    measure->type = RmReadString(rm, L"Type", L"");
-    measure->num = static_cast<int>(RmReadInt(rm, L"Num", 5));
-    measure->countryCode = RmReadString(rm, L"CountryCode", L"US");
-    measure->profile = RmReadString(rm, L"Profile", L"Default");
-    measure->onCompleteAction = RmReadString(rm, L"OnCompleteAction", L"", FALSE);
+    // Read child-specific options
+    child->index = static_cast<int>(RmReadInt(rm, L"Index", 1));
 
-    // Reset flags
-    measure->dataReady = false;
-    measure->hasExecutedAction = false;
+    // Read parent-specific options (only for owner child)
+    if (parent->ownerChild == child) {
+        // Wait for previous thread to finish
+        if (parent->workerThread.joinable()) {
+            parent->workerThread.join();
+        }
 
-    // Start async loading
-    if (!measure->type.empty()) {
-        measure->workerThread = std::thread(LoadDataAsync, measure, rm);
+        parent->type = RmReadString(rm, L"Type", L"");
+        parent->countryCode = RmReadString(rm, L"CountryCode", L"US");
+        parent->profile = RmReadString(rm, L"Profile", L"Default");
+        parent->onCompleteAction = RmReadString(rm, L"OnCompleteAction", L"", FALSE);
+
+        // Reset flags
+        parent->dataReady = false;
+        parent->hasExecutedAction = false;
+
+        // Start async loading
+        if (!parent->type.empty()) {
+            parent->workerThread = std::thread(LoadDataAsync, parent, rm);
+        }
     }
 }
 
 PLUGIN_EXPORT double Update(void* data) {
-    Measure* measure = (Measure*)data;
+    ChildMeasure* child = (ChildMeasure*)data;
+    ParentMeasure* parent = child->parent;
     
-    // Check if data is ready and execute action once
-    if (measure->dataReady && !measure->hasExecutedAction) {
-        if (!measure->onCompleteAction.empty()) {
-            RmExecute(measure->skin, measure->onCompleteAction.c_str());
-            measure->hasExecutedAction = true;
+    if (!parent) {
+        return 0.0;
+    }
+    
+    // Check if data is ready and execute action once (only for owner child)
+    if (parent->ownerChild == child) {
+        if (parent->dataReady && !parent->hasExecutedAction) {
+            if (!parent->onCompleteAction.empty()) {
+                RmExecute(parent->skin, parent->onCompleteAction.c_str());
+                parent->hasExecutedAction = true;
+            }
         }
     }
     
-    return measure->isLoading ? 1.0 : 0.0;
+    return parent->isLoading ? 1.0 : 0.0;
 }
 
 PLUGIN_EXPORT LPCWSTR GetString(void* data) {
-    Measure* measure = (Measure*)data;
+    ChildMeasure* child = (ChildMeasure*)data;
+    ParentMeasure* parent = child->parent;
 
     static std::wstring result;
     result.clear();
 
+    if (!parent) {
+        result = L"Error: No parent measure";
+        return result.c_str();
+    }
+
     // Thread-safe read
-    std::lock_guard<std::mutex> lock(measure->dataMutex);
+    std::lock_guard<std::mutex> lock(parent->dataMutex);
     
-    // Always show cached data if available, even while loading
-    if (!measure->historyTitles.empty()) {
-        for (size_t i = 0; i < measure->historyTitles.size(); ++i) {
-            result += measure->historyTitles[i];
-            if (i < measure->historyTitles.size() - 1) {
-                result += L" | ";
-            }
+    // Return the specific index (1-based)
+    if (!parent->results.empty()) {
+        if (child->index > 0 && child->index <= static_cast<int>(parent->results.size())) {
+            result = parent->results[child->index - 1];
+        }
+        else {
+            result = L"";
         }
     }
-    else if (measure->isLoading) {
+    else if (parent->isLoading) {
         result = L"Loading...";
     }
-    else if (measure->dataReady) {
+    else if (parent->dataReady) {
         result = L"No data found.";
     }
     else {
@@ -290,12 +350,20 @@ PLUGIN_EXPORT LPCWSTR GetString(void* data) {
 }
 
 PLUGIN_EXPORT void Finalize(void* data) {
-    Measure* measure = (Measure*)data;
-    
-    // Wait for worker thread to complete before cleanup
-    if (measure->workerThread.joinable()) {
-        measure->workerThread.join();
+    ChildMeasure* child = (ChildMeasure*)data;
+    ParentMeasure* parent = child->parent;
+
+    if (parent && parent->ownerChild == child) {
+        // Wait for worker thread to complete before cleanup
+        if (parent->workerThread.joinable()) {
+            parent->workerThread.join();
+        }
+
+        g_ParentMeasures.erase(
+            std::remove(g_ParentMeasures.begin(), g_ParentMeasures.end(), parent),
+            g_ParentMeasures.end());
+        delete parent;
     }
-    
-    delete measure;
+
+    delete child;
 }
