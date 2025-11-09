@@ -3,7 +3,9 @@
 #include <vector>
 #include <filesystem>
 #include "../sqlite3/sqlite3.h"
-
+#include <thread>
+#include <mutex>
+#include <atomic>
 #include <wininet.h>
 #include <sstream>
 #include "../API/RainmeterAPI.h"
@@ -24,9 +26,10 @@ std::wstring Utf8ToWide(const std::string& utf8Str) {
     MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), -1, &wideStr[0], wideStrLen);
     return wideStr;
 }
-//=====================================================================================================================================================//
-//                                                        Copy Chrome File                                                                             //
-//=====================================================================================================================================================//
+
+/*
+* Copy Chrome DB File
+*/
 
 std::wstring CopyChromeHistoryToTemp(const std::wstring& profile) {
     wchar_t tempPath[MAX_PATH];
@@ -54,9 +57,10 @@ std::wstring CopyChromeHistoryToTemp(const std::wstring& profile) {
 
     return L"";
 }
-//=====================================================================================================================================================//
-//                                                        Chrome History                                                                               //
-//=====================================================================================================================================================//
+
+/*
+* Parse Chrome History
+*/
 
 std::vector<std::wstring> GetLastHistoryTitles(const std::wstring& dbPath, int num) {
     std::vector<std::wstring> historyTitles;
@@ -94,9 +98,10 @@ std::vector<std::wstring> GetLastHistoryTitles(const std::wstring& dbPath, int n
 
     return historyTitles;
 }
-//=====================================================================================================================================================//
-//                                                         Top Trends                                                                                  //
-//=====================================================================================================================================================//
+
+/*
+*  Fetch Top Searches
+*/
 
 std::vector<std::wstring> GetTopTrends(const std::wstring& url, int num) {
     std::vector<std::wstring> trends;
@@ -140,9 +145,9 @@ std::vector<std::wstring> GetTopTrends(const std::wstring& url, int num) {
     return trends;
 }
 
-//=====================================================================================================================================================//
-//                                                         Rainmeter Function                                                                          //
-//=====================================================================================================================================================//
+/*
+* Rainmeter API Functions
+*/
 
 struct Measure {
     std::wstring type;
@@ -152,9 +157,51 @@ struct Measure {
     std::wstring onCompleteAction;
     std::vector<std::wstring> historyTitles;
     void* skin;
+    
+    std::thread workerThread;
+    std::mutex dataMutex;
+    std::atomic<bool> isLoading;
+    std::atomic<bool> dataReady;
+    bool hasExecutedAction;
 
-    Measure() : type(L""), num(0), countryCode(L"US"), profile(L"Default"), onCompleteAction(L""), skin(nullptr) {}
+    Measure() : type(L""), num(0), countryCode(L"US"), profile(L"Default"), 
+                onCompleteAction(L""), skin(nullptr), isLoading(false), 
+                dataReady(false), hasExecutedAction(false) {}
+    
+    ~Measure() {
+        if (workerThread.joinable()) {
+            workerThread.join();
+        }
+    }
 };
+
+void LoadDataAsync(Measure* measure, void* rm) {
+    measure->isLoading = true;
+    std::vector<std::wstring> tempResults;
+
+    if (measure->type == L"Chrome_History") {
+        std::wstring dbPath = CopyChromeHistoryToTemp(measure->profile);
+        if (!dbPath.empty()) {
+            tempResults = GetLastHistoryTitles(dbPath, measure->num);
+        }
+        else {
+            if (rm) RmLog(rm, LOG_ERROR, L"Could not copy Chrome history database.");
+        }
+    }
+    else if (measure->type == L"Top_Trends") {
+        std::wstring trendsUrl = L"https://trends.google.com/trending/rss?geo=" + measure->countryCode;
+        tempResults = GetTopTrends(trendsUrl, measure->num);
+    }
+
+    // Thread-safe update
+    {
+        std::lock_guard<std::mutex> lock(measure->dataMutex);
+        measure->historyTitles = tempResults;
+        measure->dataReady = true;
+    }
+    
+    measure->isLoading = false;
+}
 
 PLUGIN_EXPORT void Initialize(void** data, void* rm) {
     Measure* measure = new Measure;
@@ -164,25 +211,22 @@ PLUGIN_EXPORT void Initialize(void** data, void* rm) {
     measure->num = static_cast<int>(RmReadInt(rm, L"Num", 5));
     measure->countryCode = RmReadString(rm, L"CountryCode", L"US");
     measure->profile = RmReadString(rm, L"Profile", L"Default");
+    measure->onCompleteAction = RmReadString(rm, L"OnCompleteAction", L"", FALSE);
     measure->skin = RmGetSkin(rm);
 
-    if (measure->type == L"Chrome_History") {
-        std::wstring dbPath = CopyChromeHistoryToTemp(measure->profile);
-        if (!dbPath.empty()) {
-            measure->historyTitles = GetLastHistoryTitles(dbPath, measure->num);
-        }
-        else {
-            RmLog(rm, LOG_ERROR, L"Could not copy Chrome history database.");
-        }
-    }
-    else if (measure->type == L"Top_Trends") {
-        std::wstring trendsUrl = L"https://trends.google.com/trending/rss?geo=" + measure->countryCode;
-        measure->historyTitles = GetTopTrends(trendsUrl, measure->num);
+    // Start async loading
+    if (!measure->type.empty()) {
+        measure->workerThread = std::thread(LoadDataAsync, measure, rm);
     }
 }
 
 PLUGIN_EXPORT void Reload(void* data, void* rm, double* maxValue) {
     Measure* measure = (Measure*)data;
+
+    // Wait for previous thread to finish
+    if (measure->workerThread.joinable()) {
+        measure->workerThread.join();
+    }
 
     measure->type = RmReadString(rm, L"Type", L"");
     measure->num = static_cast<int>(RmReadInt(rm, L"Num", 5));
@@ -190,20 +234,28 @@ PLUGIN_EXPORT void Reload(void* data, void* rm, double* maxValue) {
     measure->profile = RmReadString(rm, L"Profile", L"Default");
     measure->onCompleteAction = RmReadString(rm, L"OnCompleteAction", L"", FALSE);
 
-    if (measure->type == L"Chrome_History") {
-        std::wstring dbPath = CopyChromeHistoryToTemp(measure->profile);
-        if (!dbPath.empty()) {
-            measure->historyTitles = GetLastHistoryTitles(dbPath, measure->num);
-        }
-    }
-    else if (measure->type == L"Top_Trends") {
-        std::wstring trendsUrl = L"https://trends.google.com/trending/rss?geo=" + measure->countryCode;
-        measure->historyTitles = GetTopTrends(trendsUrl, measure->num);
+    // Reset flags
+    measure->dataReady = false;
+    measure->hasExecutedAction = false;
+
+    // Start async loading
+    if (!measure->type.empty()) {
+        measure->workerThread = std::thread(LoadDataAsync, measure, rm);
     }
 }
 
 PLUGIN_EXPORT double Update(void* data) {
-    return 0.0;
+    Measure* measure = (Measure*)data;
+    
+    // Check if data is ready and execute action once
+    if (measure->dataReady && !measure->hasExecutedAction) {
+        if (!measure->onCompleteAction.empty()) {
+            RmExecute(measure->skin, measure->onCompleteAction.c_str());
+            measure->hasExecutedAction = true;
+        }
+    }
+    
+    return measure->isLoading ? 1.0 : 0.0;
 }
 
 PLUGIN_EXPORT LPCWSTR GetString(void* data) {
@@ -212,6 +264,10 @@ PLUGIN_EXPORT LPCWSTR GetString(void* data) {
     static std::wstring result;
     result.clear();
 
+    // Thread-safe read
+    std::lock_guard<std::mutex> lock(measure->dataMutex);
+    
+    // Always show cached data if available, even while loading
     if (!measure->historyTitles.empty()) {
         for (size_t i = 0; i < measure->historyTitles.size(); ++i) {
             result += measure->historyTitles[i];
@@ -219,14 +275,15 @@ PLUGIN_EXPORT LPCWSTR GetString(void* data) {
                 result += L" | ";
             }
         }
-
-
-        if (!measure->onCompleteAction.empty()) {
-            RmExecute(measure->skin, measure->onCompleteAction.c_str());
-        }
+    }
+    else if (measure->isLoading) {
+        result = L"Loading...";
+    }
+    else if (measure->dataReady) {
+        result = L"No data found.";
     }
     else {
-        result = L"No data found.";
+        result = L"Initializing...";
     }
 
     return result.c_str();
@@ -234,5 +291,11 @@ PLUGIN_EXPORT LPCWSTR GetString(void* data) {
 
 PLUGIN_EXPORT void Finalize(void* data) {
     Measure* measure = (Measure*)data;
+    
+    // Wait for worker thread to complete before cleanup
+    if (measure->workerThread.joinable()) {
+        measure->workerThread.join();
+    }
+    
     delete measure;
 }
