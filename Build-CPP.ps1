@@ -431,6 +431,7 @@ function Find-BuiltDll {
     $platformMapping = @{
         "x64" = @("x64")
         "x86" = @("x86", "x32", "Win32")  # x86 can output to multiple folder names
+        "Win32" = @("x86", "x32", "Win32")  # Win32 also maps to these folders
     }
     
     $searchFolders = $platformMapping[$Architecture]
@@ -535,9 +536,9 @@ function Dist {
         Write-Host "Cleaning previous builds..." -ForegroundColor Gray
         & $msbuild $solutionFile /t:Clean /p:Configuration=Release /v:minimal
         
-        # Build both architectures - using only x64 and x86
+        # Build both architectures - using x64 and Win32
         $x64Success = Build-Architecture -Platform "x64" -SolutionFile $solutionFile
-        $x86Success = Build-Architecture -Platform "x86" -SolutionFile $solutionFile
+        $x86Success = Build-Architecture -Platform "Win32" -SolutionFile $solutionFile
         
         # If neither build succeeded, throw an error
         if (-not $x64Success -and -not $x86Success) {
